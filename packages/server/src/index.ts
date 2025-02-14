@@ -1,5 +1,4 @@
 import express from 'express'
-import { Request, Response } from 'express'
 import path from 'path'
 import cors from 'cors'
 import http from 'http'
@@ -27,6 +26,9 @@ import { OpenTelemetry } from './metrics/OpenTelemetry'
 import { QueueManager } from './queue/QueueManager'
 import { RedisEventSubscriber } from './queue/RedisEventSubscriber'
 import { WHITELIST_URLS } from './utils/constants'
+import { sessionMiddleware, sessionHostMiddleware } from './internal/middleware/session'
+import auth0Routes from './internal/clients/auth0'
+
 import 'global-agent/bootstrap'
 
 declare global {
@@ -123,6 +125,7 @@ export class App {
     async config() {
         // Limit is needed to allow sending/receiving base64 encoded string
         const flowise_file_size_limit = process.env.FLOWISE_FILE_SIZE_LIMIT || '50mb'
+        const SERVER_VIEWS_PATH = path.join(__dirname, 'routes/views')
         this.app.use(express.json({ limit: flowise_file_size_limit }))
         this.app.use(express.urlencoded({ limit: flowise_file_size_limit, extended: true }))
         if (process.env.NUMBER_OF_PROXIES && parseInt(process.env.NUMBER_OF_PROXIES) > 0)
@@ -130,7 +133,8 @@ export class App {
 
         // Allow access from specified domains
         this.app.use(cors(getCorsOptions()))
-
+        this.app.set('view engine', 'ejs')
+        this.app.set('views', path.join(__dirname, '..', 'views'))
         // Allow embedding from specified domains.
         this.app.use((req, res, next) => {
             const allowedOrigins = getAllowedIframeOrigins()
@@ -151,6 +155,9 @@ export class App {
 
         // Add the sanitizeMiddleware to guard against XSS
         this.app.use(sanitizeMiddleware)
+        this.app.use(sessionMiddleware)
+        this.app.use(sessionHostMiddleware)
+        this.app.use(auth0Routes)
 
         const whitelistURLs = WHITELIST_URLS
         const URL_CASE_INSENSITIVE_REGEX: RegExp = /\/api\/v1\//i
@@ -251,6 +258,13 @@ export class App {
             })
         })
 
+        this.app.get('/api/v4/test', (request, response) => {
+            response.send({
+                ip: request.ip,
+                msg: 'test my route.'
+            })
+        })
+
         if (process.env.MODE === MODE.QUEUE) {
             this.app.use('/admin/queues', this.queueManager.getBullBoardRouter())
         }
@@ -265,10 +279,10 @@ export class App {
 
         this.app.use('/', express.static(uiBuildPath))
 
-        // All other requests not handled will return React app
-        this.app.use((req: Request, res: Response) => {
-            res.sendFile(uiHtmlPath)
-        })
+        // // All other requests not handled will return React app
+        // this.app.use((req: Request, res: Response) => {
+        //     res.sendFile(uiHtmlPath)
+        // })
 
         // Error handling
         this.app.use(errorHandlerMiddleware)
